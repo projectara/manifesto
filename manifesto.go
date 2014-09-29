@@ -27,7 +27,7 @@ const (
 )
 
 const (
-	MANIFEST_HEADER_SIZE	uint32	= 0x06
+	MANIFEST_HEADER_SIZE	uint16	= 0x04
 	MODULE_SIZE		uint16	= 0x13
 	FUNCTION_SIZE		uint16	= 0x06
 	STRING_SIZE		uint16	= 0x05
@@ -37,7 +37,7 @@ const (
 // Greybus version 0.1 manifest format
 type Manifest struct {
 	Manifest_header struct {
-		Size uint32
+		Size uint16
 		Version_major uint8
 		Version_minor uint8
 	}
@@ -76,14 +76,14 @@ func right_pad(s string, padStr string, pLen int) string {
 }
 
 func populate_manifest(mnf Manifest) Manifest {
-	var mnf_size uint32
+	var mnf_size uint16
 	mnf_size = 0
 
 	for k := range mnf.Cport_descriptor {
 		mnf.Cport_descriptor[k].Type = CPORT_TYPE
 		mnf.Cport_descriptor[k].Size = CPORT_SIZE
 		mnf_size = mnf_size +
-			(uint32)(mnf.Cport_descriptor[k].Size)
+			(uint16)(mnf.Cport_descriptor[k].Size)
 	}
 
 	for k := range mnf.String_descriptor {
@@ -101,20 +101,20 @@ func populate_manifest(mnf Manifest) Manifest {
 			(uint16)(len(mnf.String_descriptor[k].String))
 		mnf.String_descriptor[k].Type = STRING_TYPE
 		mnf.String_descriptor[k].Size = size
-		mnf_size = mnf_size + (uint32)(size)
+		mnf_size = mnf_size + (uint16)(size)
 	}
 
 	for k := range mnf.Function_descriptor {
 		mnf.Function_descriptor[k].Type = FUNCTION_TYPE
 		mnf.Function_descriptor[k].Size = FUNCTION_SIZE
 		mnf_size = mnf_size +
-			(uint32)(mnf.Function_descriptor[k].Size)
+			(uint16)(mnf.Function_descriptor[k].Size)
 	}
 
 	mnf.Module_descriptor.Type = MODULE_TYPE
 	mnf.Module_descriptor.Size = MODULE_SIZE
 	mnf_size = mnf_size +
-		(uint32)(mnf.Module_descriptor.Size)
+		(uint16)(mnf.Module_descriptor.Size)
 
 	/* Total size of all descriptors plus our header */
 	mnf.Manifest_header.Size = MANIFEST_HEADER_SIZE + mnf_size
