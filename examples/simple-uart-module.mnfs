@@ -8,27 +8,32 @@ version-minor = 1
 
 [module-descriptor]
 vendor = 0xffff
-product = 0x0003
+product = 0x0001
 version = 1
 vendor-string-id = 1
 product-string-id = 2
-serial-number = 0
-
-; GPIO function on CPort 1
-[function-descriptor "0"]
-cport = 1
-function-type = 0x04
+unique-id = 0
 
 ; Module vendor string (id can't be 0)
-[string-descriptor "0"]
+[string-descriptor "1"]
 id = 1
 string = "Project Ara"
 
 ; Module product string (id can't be 0)
-[string-descriptor "1"]
+[string-descriptor "2"]
 id = 2
 string = "Simple UART Module"
 
-; CPort 1
+; UART protocol on CPort 1
 [cport-descriptor "1"]
+interface = 0
 id = 1
+protocol = 0x04
+
+; Interface 0
+[interface-descriptor "0"]
+id = 0
+
+; Control Class
+[class-descriptor "0"]
+Class = 0x00
