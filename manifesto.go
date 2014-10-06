@@ -18,20 +18,21 @@ import (
 )
 
 const (
-	INVALID_TYPE	uint8		= iota
-	MODULE_TYPE	uint8		= iota
-	FUNCTION_TYPE	uint8		= iota
-	CLASS_TYPE	uint8		= iota
-	STRING_TYPE	uint8		= iota
-	CPORT_TYPE	uint8		= iota
+	INVALID_TYPE		uint8	= iota
+	MODULE_TYPE		uint8	= iota
+	STRING_TYPE		uint8	= iota
+	INTERFACE_TYPE		uint8	= iota
+	CPORT_TYPE		uint8	= iota
+	CLASS_TYPE		uint8	= iota
 )
 
 const (
 	MANIFEST_HEADER_SIZE	uint16	= 0x04
 	MODULE_SIZE		uint16	= 0x13
-	FUNCTION_SIZE		uint16	= 0x06
 	STRING_SIZE		uint16	= 0x05
-	CPORT_SIZE		uint16	= 0x05
+	INTERFACE_SIZE		uint16	= 0x04
+	CPORT_SIZE		uint16	= 0x07
+	CLASS_SIZE		uint16  = 0x04
 )
 
 // Greybus version 0.1 manifest format
@@ -49,13 +50,12 @@ type Manifest struct {
 		Version uint16
 		Vendor_string_id uint8
 		Product_string_id uint8
-		Serial_number uint64
+		Unique_id uint64
 	}
-	Function_descriptor map[string] *struct {
+	Interface_descriptor map[string] *struct {
 		Size uint16
 		Type uint8
-		Cport uint16
-		Function_type uint8
+		Id uint8
 	}
 	String_descriptor map[string] *struct {
 		Size uint16
@@ -67,7 +67,14 @@ type Manifest struct {
 	Cport_descriptor map[string] *struct {
 		Size uint16
 		Type uint8
+		Interface uint8
 		Id uint16
+		Protocol uint8
+	}
+	Class_descriptor map[string] *struct {
+		Size uint16
+		Type uint8
+		Class uint8
 	}
 }
 
@@ -79,12 +86,10 @@ func populate_manifest(mnf Manifest) Manifest {
 	var mnf_size uint16
 	mnf_size = 0
 
-	for k := range mnf.Cport_descriptor {
-		mnf.Cport_descriptor[k].Type = CPORT_TYPE
-		mnf.Cport_descriptor[k].Size = CPORT_SIZE
-		mnf_size = mnf_size +
-			(uint16)(mnf.Cport_descriptor[k].Size)
-	}
+	mnf.Module_descriptor.Type = MODULE_TYPE
+	mnf.Module_descriptor.Size = MODULE_SIZE
+	mnf_size = mnf_size +
+		(uint16)(mnf.Module_descriptor.Size)
 
 	for k := range mnf.String_descriptor {
 		var size uint16
@@ -104,17 +109,26 @@ func populate_manifest(mnf Manifest) Manifest {
 		mnf_size = mnf_size + (uint16)(size)
 	}
 
-	for k := range mnf.Function_descriptor {
-		mnf.Function_descriptor[k].Type = FUNCTION_TYPE
-		mnf.Function_descriptor[k].Size = FUNCTION_SIZE
+	for k := range mnf.Interface_descriptor {
+		mnf.Interface_descriptor[k].Type = INTERFACE_TYPE
+		mnf.Interface_descriptor[k].Size = INTERFACE_SIZE
 		mnf_size = mnf_size +
-			(uint16)(mnf.Function_descriptor[k].Size)
+			(uint16)(mnf.Interface_descriptor[k].Size)
 	}
 
-	mnf.Module_descriptor.Type = MODULE_TYPE
-	mnf.Module_descriptor.Size = MODULE_SIZE
-	mnf_size = mnf_size +
-		(uint16)(mnf.Module_descriptor.Size)
+	for k := range mnf.Cport_descriptor {
+		mnf.Cport_descriptor[k].Type = CPORT_TYPE
+		mnf.Cport_descriptor[k].Size = CPORT_SIZE
+		mnf_size = mnf_size +
+			(uint16)(mnf.Cport_descriptor[k].Size)
+	}
+
+	for k := range mnf.Class_descriptor {
+		mnf.Class_descriptor[k].Type = CLASS_TYPE
+		mnf.Class_descriptor[k].Size = CLASS_SIZE
+		mnf_size = mnf_size +
+			(uint16)(mnf.Class_descriptor[k].Size)
+	}
 
 	/* Total size of all descriptors plus our header */
 	mnf.Manifest_header.Size = MANIFEST_HEADER_SIZE + mnf_size
@@ -131,10 +145,22 @@ func write_manifest(m *os.File, mnf Manifest) {
 	/* Module descriptor */
 	binary.Write(mwriter, binary.LittleEndian, mnf.Module_descriptor)
 
-	/* Function descriptors */
-	for k := range mnf.Function_descriptor {
+	/* Cport descriptors */
+	for k := range mnf.Cport_descriptor {
 		binary.Write(mwriter, binary.LittleEndian,
-			     mnf.Function_descriptor[k])
+			     mnf.Cport_descriptor[k])
+	}
+
+	/* Interface descriptors */
+	for k := range mnf.Interface_descriptor {
+		binary.Write(mwriter, binary.LittleEndian,
+			     mnf.Interface_descriptor[k])
+	}
+
+	/* Class descriptors */
+	for k := range mnf.Class_descriptor {
+		binary.Write(mwriter, binary.LittleEndian,
+			     mnf.Class_descriptor[k])
 	}
 
 	/* String descriptors */
@@ -147,12 +173,6 @@ func write_manifest(m *os.File, mnf Manifest) {
 		binary.Write(mwriter, binary.LittleEndian, strdesc.Length)
 		binary.Write(mwriter, binary.LittleEndian, strdesc.Id)
 		mwriter.WriteString(strdesc.String)
-	}
-
-	/* Cport descriptors */
-	for k := range mnf.Cport_descriptor {
-		binary.Write(mwriter, binary.LittleEndian,
-			     mnf.Cport_descriptor[k])
 	}
 
 	mwriter.Flush()
