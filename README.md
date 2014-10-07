@@ -1,7 +1,9 @@
 # Manifesto
 
 A simple tool to generate a Greybus manifest blob from a Git config style
-syntax input file
+syntax input file.
+
+Provided under BSD license. See *LICENSE* for details.
 
 ## Install
 
