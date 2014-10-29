@@ -1,0 +1,39 @@
+;
+; Simple PWM Module Manifest
+;
+
+[manifest-header]
+version-major = 0
+version-minor = 1
+
+[module-descriptor]
+vendor = 0xffff
+product = 0x0001
+version = 1
+vendor-string-id = 1
+product-string-id = 2
+unique-id = 0
+
+; Module vendor string (id can't be 0)
+[string-descriptor "1"]
+id = 1
+string = "Project Ara"
+
+; Module product string (id can't be 0)
+[string-descriptor "2"]
+id = 2
+string = "Simple PWM Module"
+
+; PWM protocol on CPort 1
+[cport-descriptor "1"]
+interface = 0
+id = 1
+protocol = 0x09
+
+; Interface 0
+[interface-descriptor "0"]
+id = 0
+
+; Control Class
+[class-descriptor "0"]
+Class = 0x00
