@@ -4,6 +4,8 @@
  * Copyright 2014 Google Inc.
  * Copyright 2014 Linaro Ltd.
  *
+ * Provided under the three clause BSD license found in the LICENSE file.
+ *
  * Note: quick and dirty, needs a bunch of error checking on I/O and data read
  * 	 from the gcfg-style manifest source file
  */

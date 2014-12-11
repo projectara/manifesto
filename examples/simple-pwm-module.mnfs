@@ -1,6 +1,11 @@
 ;
 ; Simple PWM Module Manifest
 ;
+; Copyright 2014 Google Inc.
+; Copyright 2014 Linaro Ltd.
+;
+; Provided under the three clause BSD license found in the LICENSE file.
+;
 
 [manifest-header]
 version-major = 0
