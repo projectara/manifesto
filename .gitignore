@@ -1,0 +1,7 @@
+manifesto
+examples/*.mnfb
+*.mnfb
+.*
+*.cmd
+.*.swp
+*.patch

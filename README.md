@@ -7,7 +7,8 @@ Provided under BSD license. See *LICENSE* for details.
 
 ## Install
 
-`export GOPATH=.../go`
+# This should be an absolute path instead of relative one
+`export GOPATH=~/go/`
 
 `go get code.google.com/p/gcfg`
 
