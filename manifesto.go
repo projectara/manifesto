@@ -24,18 +24,18 @@ import (
 
 const (
 	INVALID_TYPE		uint8	= iota
-	MODULE_TYPE		uint8	= iota
-	STRING_TYPE		uint8	= iota
 	INTERFACE_TYPE		uint8	= iota
+	STRING_TYPE		uint8	= iota
+	BUNDLE_TYPE		uint8	= iota
 	CPORT_TYPE		uint8	= iota
 	CLASS_TYPE		uint8	= iota
 )
 
 const (
 	MANIFEST_HEADER_SIZE	uint16	= 0x04
-	MODULE_SIZE		uint16	= 0x13
+	INTERFACE_SIZE		uint16	= 0x13
 	STRING_SIZE		uint16	= 0x05
-	INTERFACE_SIZE		uint16	= 0x04
+	BUNDLE_SIZE		uint16	= 0x05
 	CPORT_SIZE		uint16	= 0x07
 	CLASS_SIZE		uint16  = 0x04
 )
@@ -47,7 +47,7 @@ type Manifest struct {
 		Version_major uint8
 		Version_minor uint8
 	}
-	Module_descriptor struct {
+	Interface_descriptor struct {
 		Size uint16
 		Type uint8
 		Vendor uint16
@@ -57,10 +57,11 @@ type Manifest struct {
 		Product_string_id uint8
 		Unique_id uint64
 	}
-	Interface_descriptor map[string] *struct {
+	Bundle_descriptor map[string] *struct {
 		Size uint16
 		Type uint8
 		Id uint8
+		Class uint8
 	}
 	String_descriptor map[string] *struct {
 		Size uint16
@@ -72,7 +73,7 @@ type Manifest struct {
 	Cport_descriptor map[string] *struct {
 		Size uint16
 		Type uint8
-		Interface uint8
+		Bundle uint8
 		Id uint16
 		Protocol uint8
 	}
@@ -91,10 +92,10 @@ func populate_manifest(mnf Manifest) Manifest {
 	var mnf_size uint16
 	mnf_size = 0
 
-	mnf.Module_descriptor.Type = MODULE_TYPE
-	mnf.Module_descriptor.Size = MODULE_SIZE
+	mnf.Interface_descriptor.Type = INTERFACE_TYPE
+	mnf.Interface_descriptor.Size = INTERFACE_SIZE
 	mnf_size = mnf_size +
-		(uint16)(mnf.Module_descriptor.Size)
+		(uint16)(mnf.Interface_descriptor.Size)
 
 	for k := range mnf.String_descriptor {
 		var size uint16
@@ -114,11 +115,11 @@ func populate_manifest(mnf Manifest) Manifest {
 		mnf_size = mnf_size + (uint16)(size)
 	}
 
-	for k := range mnf.Interface_descriptor {
-		mnf.Interface_descriptor[k].Type = INTERFACE_TYPE
-		mnf.Interface_descriptor[k].Size = INTERFACE_SIZE
+	for k := range mnf.Bundle_descriptor {
+		mnf.Bundle_descriptor[k].Type = BUNDLE_TYPE
+		mnf.Bundle_descriptor[k].Size = BUNDLE_SIZE
 		mnf_size = mnf_size +
-			(uint16)(mnf.Interface_descriptor[k].Size)
+			(uint16)(mnf.Bundle_descriptor[k].Size)
 	}
 
 	for k := range mnf.Cport_descriptor {
@@ -147,8 +148,8 @@ func write_manifest(m *os.File, mnf Manifest) {
 	/* Manifest header */
 	binary.Write(mwriter, binary.LittleEndian, mnf.Manifest_header)
 
-	/* Module descriptor */
-	binary.Write(mwriter, binary.LittleEndian, mnf.Module_descriptor)
+	/* Interface descriptor */
+	binary.Write(mwriter, binary.LittleEndian, mnf.Interface_descriptor)
 
 	/* Cport descriptors */
 	for k := range mnf.Cport_descriptor {
@@ -156,10 +157,10 @@ func write_manifest(m *os.File, mnf Manifest) {
 			     mnf.Cport_descriptor[k])
 	}
 
-	/* Interface descriptors */
-	for k := range mnf.Interface_descriptor {
+	/* Bundle descriptors */
+	for k := range mnf.Bundle_descriptor {
 		binary.Write(mwriter, binary.LittleEndian,
-			     mnf.Interface_descriptor[k])
+			     mnf.Bundle_descriptor[k])
 	}
 
 	/* Class descriptors */
