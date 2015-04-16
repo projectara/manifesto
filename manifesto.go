@@ -33,7 +33,7 @@ const (
 
 const (
 	MANIFEST_HEADER_SIZE	uint16	= 0x04
-	INTERFACE_SIZE		uint16	= 0x11
+	INTERFACE_SIZE		uint16	= 0x13
 	STRING_SIZE		uint16	= 0x05
 	BUNDLE_SIZE		uint16	= 0x05
 	CPORT_SIZE		uint16	= 0x07
@@ -52,6 +52,7 @@ type Manifest struct {
 		Type uint8
 		Vendor uint16
 		Product uint16
+		Version uint16
 		Vendor_string_id uint8
 		Product_string_id uint8
 		Unique_id uint64
