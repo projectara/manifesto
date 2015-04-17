@@ -32,13 +32,14 @@ const (
 
 const (
 	MANIFEST_HEADER_SIZE	uint16	= 0x04
-	INTERFACE_SIZE		uint16	= 0x05
-	STRING_SIZE		uint16	= 0x05
-	BUNDLE_SIZE		uint16	= 0x05
-	CPORT_SIZE		uint16	= 0x07
+	INTERFACE_SIZE		uint16	= 0x08
+	STRING_SIZE		uint16	= 0x06
+	BUNDLE_SIZE		uint16	= 0x08
+	CPORT_SIZE		uint16	= 0x08
 )
 
 // Greybus version 0.1 manifest format
+
 type Manifest struct {
 	Manifest_header struct {
 		Size uint16
@@ -48,18 +49,25 @@ type Manifest struct {
 	Interface_descriptor struct {
 		Size uint16
 		Type uint8
+		Pad0 uint8
 		Vendor_string_id uint8
 		Product_string_id uint8
+		Pad1 uint8
+		Pad2 uint8
 	}
 	Bundle_descriptor map[string] *struct {
 		Size uint16
 		Type uint8
+		Pad0 uint8
 		Id uint8
 		Class uint8
+		Pad1 uint8
+		Pad2 uint8
 	}
 	String_descriptor map[string] *struct {
 		Size uint16
 		Type uint8
+		Pad uint8
 		Length uint8
 		Id uint8
 		String string
@@ -67,6 +75,7 @@ type Manifest struct {
 	Cport_descriptor map[string] *struct {
 		Size uint16
 		Type uint8
+		Pad uint8
 		Id uint16
 		Bundle uint8
 		Protocol uint8
@@ -157,6 +166,7 @@ func write_manifest(m *os.File, mnf Manifest) {
 		/* Binary writer doesn't work on strings, so do it manually */
 		binary.Write(mwriter, binary.LittleEndian, strdesc.Size)
 		binary.Write(mwriter, binary.LittleEndian, strdesc.Type)
+		binary.Write(mwriter, binary.LittleEndian, strdesc.Pad)
 		binary.Write(mwriter, binary.LittleEndian, strdesc.Length)
 		binary.Write(mwriter, binary.LittleEndian, strdesc.Id)
 		mwriter.WriteString(strdesc.String)
