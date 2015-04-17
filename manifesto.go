@@ -67,8 +67,8 @@ type Manifest struct {
 	Cport_descriptor map[string] *struct {
 		Size uint16
 		Type uint8
-		Bundle uint8
 		Id uint16
+		Bundle uint8
 		Protocol uint8
 	}
 }
