@@ -35,7 +35,3 @@ protocol = 0x04
 [bundle-descriptor "0"]
 class = 4
 id = 0
-
-; Control Class
-[class-descriptor "0"]
-class = 0x00

@@ -28,7 +28,6 @@ const (
 	STRING_TYPE		uint8	= iota
 	BUNDLE_TYPE		uint8	= iota
 	CPORT_TYPE		uint8	= iota
-	CLASS_TYPE		uint8	= iota
 )
 
 const (
@@ -37,7 +36,6 @@ const (
 	STRING_SIZE		uint16	= 0x05
 	BUNDLE_SIZE		uint16	= 0x05
 	CPORT_SIZE		uint16	= 0x07
-	CLASS_SIZE		uint16  = 0x04
 )
 
 // Greybus version 0.1 manifest format
@@ -72,11 +70,6 @@ type Manifest struct {
 		Bundle uint8
 		Id uint16
 		Protocol uint8
-	}
-	Class_descriptor map[string] *struct {
-		Size uint16
-		Type uint8
-		Class uint8
 	}
 }
 
@@ -130,13 +123,6 @@ func populate_manifest(mnf Manifest) Manifest {
 			(uint16)(mnf.Cport_descriptor[k].Size)
 	}
 
-	for k := range mnf.Class_descriptor {
-		mnf.Class_descriptor[k].Type = CLASS_TYPE
-		mnf.Class_descriptor[k].Size = CLASS_SIZE
-		mnf_size = mnf_size +
-			(uint16)(mnf.Class_descriptor[k].Size)
-	}
-
 	/* Total size of all descriptors plus our header */
 	mnf.Manifest_header.Size = MANIFEST_HEADER_SIZE + mnf_size
 
@@ -162,12 +148,6 @@ func write_manifest(m *os.File, mnf Manifest) {
 	for k := range mnf.Bundle_descriptor {
 		binary.Write(mwriter, binary.LittleEndian,
 			     mnf.Bundle_descriptor[k])
-	}
-
-	/* Class descriptors */
-	for k := range mnf.Class_descriptor {
-		binary.Write(mwriter, binary.LittleEndian,
-			     mnf.Class_descriptor[k])
 	}
 
 	/* String descriptors */
