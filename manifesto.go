@@ -102,10 +102,15 @@ func populate_manifest(mnf Manifest) Manifest {
 		/* Raw string length for the length field */
 		length := len(mnf.String_descriptor[k].String)
 		mnf.String_descriptor[k].Length = (uint8)(length)
-		/* Pad strings to 4 byte alignment */
-		mnf.String_descriptor[k].String =
-			right_pad(mnf.String_descriptor[k].String,
-				 "\x00", length % 4)
+		length = (int)(STRING_SIZE) + length
+
+		/* Pad string descriptor to 4 byte boundaries */
+		if length % 4 != 0 {
+			mnf.String_descriptor[k].String =
+				right_pad(mnf.String_descriptor[k].String,
+						"\x00", 4 - length % 4)
+		}
+
 		/* Total string descriptor size includes string pad */
 		size = STRING_SIZE +
 			(uint16)(len(mnf.String_descriptor[k].String))
