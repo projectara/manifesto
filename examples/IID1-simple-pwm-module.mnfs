@@ -25,13 +25,29 @@ string = "Project Ara"
 id = 2
 string = "Simple PWM Interface"
 
-; PWM protocol on CPort 0
-[cport-descriptor "0"]
-bundle = 0
-id = 0
+; Control cport and bundle are optional and are so commented out here.
+; - Control cport's id must be 2 and its bundle number must be 0.
+; - No other bundle or control cport may use these values.
+; - Class and protocol of bundle and cport must be marked as 0x00.
+;
+; Control protocol on CPort 2
+;[cport-descriptor "2"]
+;bundle = 0
+;id = 2
+;protocol = 0x00
+;
+; Control protocol Bundle 0
+;[bundle-descriptor "0"]
+;class = 0
+;id = 0
+
+; PWM protocol on CPort 1
+[cport-descriptor "1"]
+bundle = 1
+id = 1
 protocol = 0x09
 
-; Bundle 0
-[bundle-descriptor "0"]
+; Bundle 1
+[bundle-descriptor "1"]
 class = 9
-id = 0
+id = 1
