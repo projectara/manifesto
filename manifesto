@@ -1,0 +1,249 @@
+#!/usr/bin/env python
+
+# Copyright (c) 2015 Google, Inc.
+# Copyright (c) 2015 Linaro, Ltd.
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+# 1. Redistributions of source code must retain the above copyright notice,
+# this list of conditions and the following disclaimer.
+# 2. Redistributions in binary form must reproduce the above copyright notice,
+# this list of conditions and the following disclaimer in the documentation
+# and/or other materials provided with the distribution.
+# 3. Neither the name of the copyright holder nor the names of its
+# contributors may be used to endorse or promote products derived from this
+# software without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
+# THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+# PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR
+# CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+# EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+# PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
+# OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
+# WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+# OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
+# ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+from __future__ import print_function
+
+import collections
+try:
+    import configparser
+except ImportError:
+    import ConfigParser as configparser
+import os.path
+import struct
+import sys
+
+# Greybus version with which we comply.
+GB_VERSION_MAJOR = 0
+GB_VERSION_MINOR = 1
+
+# Descriptor types.
+INTERFACE_DESCRIPTOR_TYPE = 0x01
+STRING_DESCRIPTOR_TYPE = 0x02
+BUNDLE_DESCRIPTOR_TYPE = 0x03
+CPORT_DESCRIPTOR_TYPE = 0x04
+
+# Sizes of interest.
+MANIFEST_MAX_SIZE = 0xffff
+MANIFEST_HEADER_SIZE = 0x0004
+INTERFACE_DESCRIPTOR_SIZE = 0x0008
+def string_descriptor_size(string):
+    base_size = 0x0006 + len(string)
+    mod = base_size % 4
+    pad_bytes = 4 - mod if mod else 0
+    return base_size + pad_bytes
+STRING_DESCRIPTOR_MAX_SIZE = 0x0006 + 0xff   # length field is 1 byte
+BUNDLE_DESCRIPTOR_SIZE = 0x0008
+CPORT_DESCRIPTOR_SIZE = 0x0008
+
+# Format strings for struct packing values into the on-wire manifest
+# binary format.
+#
+# Users are responsible for zero-padding beyond these format strings.
+def _desc(descriptor_data):
+    little_endian = '<'
+    descriptor_header = 'HBx'
+    return little_endian + descriptor_header + descriptor_data
+MANIFEST_HEADER_FMT = '<HBB'
+INTERFACE_DESCRIPTOR_FMT = _desc('BB')
+def string_descriptor_fmt(str_):
+    return _desc('BB{}s').format(len(str_))
+BUNDLE_DESCRIPTOR_FMT = _desc('BB')
+CPORT_DESCRIPTOR_FMT = _desc('HBB')
+
+# String literals found in .mnfs files.
+MNFS_MNFS_HEADER = 'manifest-header'
+MNFS_MNFS_HEADER_VMAJ = 'version-major'
+MNFS_MNFS_HEADER_VMIN = 'version-minor'
+MNFS_INTERFACE_DESC = 'interface-descriptor'
+MNFS_INTERFACE_DESC_VSID = 'vendor-string-id'
+MNFS_INTERFACE_DESC_PSID = 'product-string-id'
+MNFS_STRING_DESC = 'string-descriptor'
+MNFS_STRING_DESC_ID = 'id'
+MNFS_STRING_DESC_STRING = 'string'
+MNFS_CPORT_DESC = 'cport-descriptor'
+MNFS_CPORT_DESC_ID = 'id'
+MNFS_CPORT_DESC_BUNDLE = 'bundle'
+MNFS_CPORT_DESC_PROTOCOL = 'protocol'
+MNFS_BUNDLE_DESC = 'bundle-descriptor'
+MNFS_BUNDLE_DESC_ID = 'id'
+MNFS_BUNDLE_DESC_CLASS = 'class'
+
+def abort():
+    sys.exit(1)
+
+def usage():
+    print('Usage: {} <manifest.mnfs>\n'
+          '    Produces a binary manifest.mnfb file, given a human-readable\n'
+          '    manifest file manifest.mnfs.'.format(sys.argv[0]),
+          file=sys.stderr)
+    abort()
+
+class ManifestPacker(object):
+    """Generates a module manifest binary, given descriptor data.
+    """
+
+    def __init__(self):
+        self.__mnfb = bytearray(MANIFEST_MAX_SIZE)
+        self._offset = MANIFEST_HEADER_SIZE
+
+    def __get_mnfb(self):
+        struct.pack_into(MANIFEST_HEADER_FMT, self.__mnfb, 0,
+                         self._offset, GB_VERSION_MAJOR, GB_VERSION_MINOR);
+        return self.__mnfb[:self._offset]
+
+    mnfb = property(fget=__get_mnfb, doc="Current manifest binary")
+
+    def _inc_offset(self, offset):
+        self._offset += offset
+        assert self._offset % 4 == 0, self._offset
+        if self._offset >= MANIFEST_MAX_SIZE:
+            raise OverflowError("manifest binary would exceed maximum size 0x{:x}".format(
+                MANIFEST_MAX_SIZE))
+
+    def add_interface_descriptor(self, vendor_string_id, product_string_id):
+        """Append an interface descriptor to the manifest binary."""
+        struct.pack_into(INTERFACE_DESCRIPTOR_FMT, self.__mnfb, self._offset,
+                         INTERFACE_DESCRIPTOR_SIZE, INTERFACE_DESCRIPTOR_TYPE,
+                         vendor_string_id, product_string_id)
+        self._inc_offset(INTERFACE_DESCRIPTOR_SIZE)
+
+    def add_string_descriptor(self, id_, str_):
+        """Append a string descriptor to the manifest binary."""
+        desc_size = string_descriptor_size(str_)
+        if desc_size > STRING_DESCRIPTOR_MAX_SIZE:
+            err = 'string too long; desc. length={}, max={}: "{}[...]"'.format(
+                desc_size, STRING_DESCRIPTOR_MAX_SIZE, str_[:15])
+            raise ValueError(err)
+        fmt = string_descriptor_fmt(str_)
+        struct.pack_into(fmt, self.__mnfb, self._offset,
+                         desc_size, STRING_DESCRIPTOR_TYPE,
+                         len(str_), id_, str_.encode('utf-8'))
+        self._inc_offset(desc_size)
+
+    def add_bundle_descriptor(self, id_, class_):
+        """Append a bundle descriptor to the manifest binary."""
+        struct.pack_into(BUNDLE_DESCRIPTOR_FMT, self.__mnfb, self._offset,
+                         BUNDLE_DESCRIPTOR_SIZE, BUNDLE_DESCRIPTOR_TYPE,
+                         id_, class_)
+        self._inc_offset(BUNDLE_DESCRIPTOR_SIZE)
+
+    def add_cport_descriptor(self, id_, bundle, protocol):
+        """Append a CPort descriptor to the manifest binary."""
+        struct.pack_into(CPORT_DESCRIPTOR_FMT, self.__mnfb, self._offset,
+                         CPORT_DESCRIPTOR_SIZE, CPORT_DESCRIPTOR_TYPE,
+                         id_, bundle, protocol)
+        self._inc_offset(CPORT_DESCRIPTOR_SIZE)
+
+def generate_mnfb(mnfs_file):
+    # Force an OrderedDict to get deterministic output even on Python 2.6.
+    cfg_parser = configparser.ConfigParser(dict_type=collections.OrderedDict)
+    parsed_files = cfg_parser.read(mnfs_file)
+    if mnfs_file not in parsed_files:
+        raise IOError("can't read {}.".format(mnfs_file))
+
+    mp = ManifestPacker()
+
+    # configparser isn't quite up to the task for the .mnfs format so
+    # we do a little extra parsing here for sections which have
+    # separate quoted identifiers (e.g. [cport-descriptor "1"]).
+    for sec in cfg_parser.sections():
+        sec_s = sec.strip()
+        try:
+            if sec_s == MNFS_MNFS_HEADER:
+                vmaj = int(cfg_parser.get(sec, MNFS_MNFS_HEADER_VMAJ),
+                           base=0)
+                vmin = int(cfg_parser.get(sec, MNFS_MNFS_HEADER_VMIN),
+                           base=0)
+                if not (vmaj == GB_VERSION_MAJOR and vmin == GB_VERSION_MINOR):
+                    raise ValueError(
+                        "Got version {}.{}; only version {}.{} interfaces are supported".format(
+                        vmaj, vmin, GB_VERSION_MAJOR, GB_VERSION_MINOR))
+            elif sec_s == MNFS_INTERFACE_DESC:
+                vsid = int(cfg_parser.get(sec, MNFS_INTERFACE_DESC_VSID),
+                           base=0)
+                psid = int(cfg_parser.get(sec, MNFS_INTERFACE_DESC_PSID),
+                            base=0)
+                mp.add_interface_descriptor(vsid, psid)
+            elif sec_s.startswith(MNFS_STRING_DESC):
+                if sec.split()[0] != MNFS_STRING_DESC:
+                    raise ValueError('invalid section [{}]'.format(sec))
+                id_ = int(cfg_parser.get(sec, MNFS_STRING_DESC_ID), base=0)
+                str_ = cfg_parser.get(sec, MNFS_STRING_DESC_STRING)
+                mp.add_string_descriptor(id_, str_)
+            elif sec_s.startswith(MNFS_BUNDLE_DESC):
+                if sec.split()[0] != MNFS_BUNDLE_DESC:
+                    raise ValueError('invalid section [{}]'.format(sec))
+                id_ = int(cfg_parser.get(sec, MNFS_BUNDLE_DESC_ID), base=0)
+                class_ = int(cfg_parser.get(sec, MNFS_BUNDLE_DESC_CLASS),
+                             base=0)
+                mp.add_bundle_descriptor(id_, class_)
+            elif sec_s.startswith(MNFS_CPORT_DESC):
+                if sec.split()[0] != MNFS_CPORT_DESC:
+                    raise ValueError('invalid section [{}]'.format(sec))
+                id_ = int(cfg_parser.get(sec, MNFS_CPORT_DESC_ID), base=0)
+                bundle = int(cfg_parser.get(sec, MNFS_CPORT_DESC_BUNDLE),
+                             base=0)
+                protocol = int(cfg_parser.get(sec, MNFS_CPORT_DESC_PROTOCOL),
+                               base=0)
+                mp.add_cport_descriptor(id_, bundle, protocol)
+            else:
+                raise ValueError('invalid section [{}]'.format(sec))
+        except configparser.NoOptionError as e:
+            raise ValueError(e.message)
+
+    return mp.mnfb
+
+def main():
+    if len(sys.argv) != 2:
+        print('Error: missing manifest file.', file=sys.stderr)
+        usage()
+
+    mnfs = sys.argv[1]
+    mnfb = os.path.splitext(mnfs)[0] + '.mnfb'
+
+    try:
+        mnfb_contents = generate_mnfb(mnfs)
+    except ValueError as ve:
+        print("Error: invalid manifest: {}".format(ve.message),
+               file=sys.stderr)
+        abort()
+    except (IOError, OverflowError) as e:
+        print("Error: {}".format(e.message), file=sys.stderr)
+        abort()
+
+    try:
+        with open(mnfb, 'wb') as f:
+            f.write(mnfb_contents)
+    except IOError as e:
+        print("Error: can't write {}: {}".format(mnfb, e.strerror),
+              file=sys.stderr)
+        abort()
+
+if __name__ == '__main__':
+    main()

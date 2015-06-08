@@ -1,32 +1,20 @@
 # Manifesto
 
-A simple tool to generate a Greybus manifest blob from a Git config style
-syntax input file.
+A simple tool to generate a Greybus manifest blob from a Python
+ConfigParser-style input file.
 
 Provided under BSD license. See *LICENSE* for details.
 
 ## Install
 
-# This should be an absolute path instead of relative one
-`export GOPATH=~/go/`
+Put 'manifesto' in your PATH; Python 2.7 is supported, and Python 2.6
+may work as well. Python 3 should work also.
 
-`go get code.google.com/p/gcfg`
+## Running Manifesto
 
-## Run
-
-`go run manifesto.go test.mnfs`
+`$ manifesto test.mnfs`
 
 Generates *test.mnfb* in same directory as source file
-
-## Build
-
-To generate a binary:
-
-`go build manifesto.go`
-
-and run as:
-
-`./manifesto test.mnfs`
 
 ## Example
 
@@ -56,12 +44,12 @@ function-type = 0x07
 ; Module vendor string (id can't be 0)
 [string-descriptor "0"]
 id = 1
-string = "Project Ara"
+string = Project Ara
 
 ; Module product string (id can't be 0)
 [string-descriptor "1"]
 id = 2
-string = "Simple I2C Module"
+string = Simple I2C Module
 
 ; CPort 1
 [cport-descriptor "1"]
@@ -70,4 +58,4 @@ id = 1
 
 ### Build Simple I2C Module manifest blob
 
-`go run manifesto.go examples/simple-i2c-module.mnfs`
+manifesto examples/simple-i2c-module.mnfs

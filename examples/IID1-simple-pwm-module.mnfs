@@ -18,12 +18,12 @@ product-string-id = 2
 ; Interface vendor string (id can't be 0)
 [string-descriptor "1"]
 id = 1
-string = "Project Ara"
+string = Project Ara
 
 ; Interface product string (id can't be 0)
 [string-descriptor "2"]
 id = 2
-string = "Simple PWM Interface"
+string = Simple PWM Interface
 
 ; Control cport and bundle are optional and are so commented out here.
 ; - Control cport's id must be 2 and its bundle number must be 0.
