@@ -84,14 +84,11 @@ MNFS_INTERFACE_DESC = 'interface-descriptor'
 MNFS_INTERFACE_DESC_VSID = 'vendor-string-id'
 MNFS_INTERFACE_DESC_PSID = 'product-string-id'
 MNFS_STRING_DESC = 'string-descriptor'
-MNFS_STRING_DESC_ID = 'id'
 MNFS_STRING_DESC_STRING = 'string'
 MNFS_CPORT_DESC = 'cport-descriptor'
-MNFS_CPORT_DESC_ID = 'id'
 MNFS_CPORT_DESC_BUNDLE = 'bundle'
 MNFS_CPORT_DESC_PROTOCOL = 'protocol'
 MNFS_BUNDLE_DESC = 'bundle-descriptor'
-MNFS_BUNDLE_DESC_ID = 'id'
 MNFS_BUNDLE_DESC_CLASS = 'class'
 
 def abort():
@@ -160,6 +157,27 @@ class ManifestPacker(object):
                          id_, bundle, protocol)
         self._inc_offset(CPORT_DESCRIPTOR_SIZE)
 
+def parse_id(sec):
+    """Parse IDs from section headers.
+
+    The section header is assumed to be of the form 'XXX "id"'
+    (with the double quotes), with an integer id. This function
+    returns id as an int, or raises ValueError."""
+    try:
+        return int(sec.split()[1].strip('"'))
+    except ValueError:
+        raise ValueError('invalid section header: {}'.format(sec))
+
+def warn_on_old_id_syntax(mnfs_file, cfg_parser, sec):
+    try:
+        cfg_parser.get(sec, 'id')
+    except configparser.NoOptionError:
+        pass
+    else:
+        print('Warning: {}: ignoring obsolete "id" item in section {}'.format(
+                  mnfs_file, sec),
+              file=sys.stderr)
+
 def generate_mnfb(mnfs_file):
     # Force an OrderedDict to get deterministic output even on Python 2.6.
     cfg_parser = configparser.ConfigParser(dict_type=collections.OrderedDict)
@@ -172,6 +190,13 @@ def generate_mnfb(mnfs_file):
     # configparser isn't quite up to the task for the .mnfs format so
     # we do a little extra parsing here for sections which have
     # separate quoted identifiers (e.g. [cport-descriptor "1"]).
+    #
+    # NB: for descriptors which have IDs older versions of manifesto
+    # had an id=X field within the section. However, manifests still
+    # had [section-header "id"] headers. We now parse the ID from the
+    # section header, but emit warnings so users of old manifests
+    # don't get confused. These warnings can be removed if enough time
+    # goes by that "enough" users are converted over.
     for sec in cfg_parser.sections():
         sec_s = sec.strip()
         try:
@@ -193,20 +218,23 @@ def generate_mnfb(mnfs_file):
             elif sec_s.startswith(MNFS_STRING_DESC):
                 if sec.split()[0] != MNFS_STRING_DESC:
                     raise ValueError('invalid section [{}]'.format(sec))
-                id_ = int(cfg_parser.get(sec, MNFS_STRING_DESC_ID), base=0)
+                warn_on_old_id_syntax(mnfs_file, cfg_parser, sec_s)
+                id_ = parse_id(sec_s)
                 str_ = cfg_parser.get(sec, MNFS_STRING_DESC_STRING)
                 mp.add_string_descriptor(id_, str_)
             elif sec_s.startswith(MNFS_BUNDLE_DESC):
                 if sec.split()[0] != MNFS_BUNDLE_DESC:
                     raise ValueError('invalid section [{}]'.format(sec))
-                id_ = int(cfg_parser.get(sec, MNFS_BUNDLE_DESC_ID), base=0)
+                warn_on_old_id_syntax(mnfs_file, cfg_parser, sec_s)
+                id_ = parse_id(sec_s)
                 class_ = int(cfg_parser.get(sec, MNFS_BUNDLE_DESC_CLASS),
                              base=0)
                 mp.add_bundle_descriptor(id_, class_)
             elif sec_s.startswith(MNFS_CPORT_DESC):
                 if sec.split()[0] != MNFS_CPORT_DESC:
                     raise ValueError('invalid section [{}]'.format(sec))
-                id_ = int(cfg_parser.get(sec, MNFS_CPORT_DESC_ID), base=0)
+                warn_on_old_id_syntax(mnfs_file, cfg_parser, sec_s)
+                id_ = parse_id(sec_s)
                 bundle = int(cfg_parser.get(sec, MNFS_CPORT_DESC_BUNDLE),
                              base=0)
                 protocol = int(cfg_parser.get(sec, MNFS_CPORT_DESC_PROTOCOL),
