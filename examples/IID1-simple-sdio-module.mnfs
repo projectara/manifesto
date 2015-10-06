@@ -1,8 +1,8 @@
 ;
-; Simple GPIO Interface Manifest
+; Simple SDIO Interface Manifest
 ;
-; Copyright 2014 Google Inc.
-; Copyright 2014 Linaro Ltd.
+; Copyright 2014-2015 Google Inc.
+; Copyright 2014-2015 Linaro Ltd.
 ;
 ; Provided under the three clause BSD license found in the LICENSE file.
 ;
@@ -37,7 +37,7 @@ protocol = 0x00
 [bundle-descriptor 0]
 class = 0
 
-; GPIO protocol on CPort 1
+; SDIO protocol on CPort 1
 [cport-descriptor 1]
 bundle = 1
 protocol = 0x07
