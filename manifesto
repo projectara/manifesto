@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-# Copyright (c) 2015 Google, Inc.
+# Copyright (c) 2015-2016 Google, Inc.
 # Copyright (c) 2015 Linaro, Ltd.
 # All rights reserved.
 #
@@ -29,6 +29,7 @@
 
 from __future__ import print_function
 
+import argparse
 import collections
 try:
     import configparser
@@ -38,240 +39,656 @@ import os.path
 import struct
 import sys
 
-# Greybus version with which we comply.
-GB_VERSION_MAJOR = 0
-GB_VERSION_MINOR = 1
+### Exception management
+class Error(Exception):
+    def __init__(self, msg=''):
+        self.message = msg
+        super(Error, self).__init__(msg)
 
-# Descriptor types.
-INTERFACE_DESCRIPTOR_TYPE = 0x01
-STRING_DESCRIPTOR_TYPE = 0x02
-BUNDLE_DESCRIPTOR_TYPE = 0x03
-CPORT_DESCRIPTOR_TYPE = 0x04
+    def __repr__(self):
+        return self.message
 
-# Sizes of interest.
-MANIFEST_MAX_SIZE = 0xffff
-MANIFEST_HEADER_SIZE = 0x0004
-INTERFACE_DESCRIPTOR_SIZE = 0x0008
-def string_descriptor_size(string):
-    base_size = 0x0006 + len(string)
-    mod = base_size % 4
-    pad_bytes = 4 - mod if mod else 0
-    return base_size + pad_bytes
-STRING_DESCRIPTOR_MAX_SIZE = 0x0006 + 0xff   # length field is 1 byte
-BUNDLE_DESCRIPTOR_SIZE = 0x0008
-CPORT_DESCRIPTOR_SIZE = 0x0008
+    __str__ = __repr__
 
-# Format strings for struct packing values into the on-wire manifest
-# binary format.
-#
-# Users are responsible for zero-padding beyond these format strings.
-def _desc(descriptor_data):
-    little_endian = '<'
-    descriptor_header = 'HBx'
-    return little_endian + descriptor_header + descriptor_data
-MANIFEST_HEADER_FMT = '<HBB'
-INTERFACE_DESCRIPTOR_FMT = _desc('BB')
-def string_descriptor_fmt(str_):
-    return _desc('BB{}s').format(len(str_))
-BUNDLE_DESCRIPTOR_FMT = _desc('BB')
-CPORT_DESCRIPTOR_FMT = _desc('HBB')
+### Error and warning management
 
-# String literals found in .mnfs files.
-MNFS_MNFS_HEADER = 'manifest-header'
-MNFS_MNFS_HEADER_VMAJ = 'version-major'
-MNFS_MNFS_HEADER_VMIN = 'version-minor'
-MNFS_INTERFACE_DESC = 'interface-descriptor'
-MNFS_INTERFACE_DESC_VSID = 'vendor-string-id'
-MNFS_INTERFACE_DESC_PSID = 'product-string-id'
-MNFS_STRING_DESC = 'string-descriptor'
-MNFS_STRING_DESC_STRING = 'string'
-MNFS_CPORT_DESC = 'cport-descriptor'
-MNFS_CPORT_DESC_BUNDLE = 'bundle'
-MNFS_CPORT_DESC_PROTOCOL = 'protocol'
-MNFS_BUNDLE_DESC = 'bundle-descriptor'
-MNFS_BUNDLE_DESC_CLASS = 'class'
+def print_stderr(*objs):
+    print(*objs, file=sys.stderr)
 
-def abort():
-    sys.exit(1)
+class warnings(object):
+    silent = False
 
-def usage():
-    print('Usage: {} <manifest.mnfs>\n'
-          '    Produces a binary manifest.mnfb file, given a human-readable\n'
-          '    manifest file manifest.mnfs.'.format(sys.argv[0]),
-          file=sys.stderr)
-    abort()
+    @staticmethod
+    def warn(msg):
+        if not warnings.silent:
+            print_stderr("Warning: " + msg)
 
-class ManifestPacker(object):
-    """Generates a module manifest binary, given descriptor data.
+### Manifest internal representation
+
+class Manifest(object):
+    """
+    The Manifest is the composition of a Manifest Header and a set of
+    Descriptors
     """
 
     def __init__(self):
-        self.__mnfb = bytearray(MANIFEST_MAX_SIZE)
-        self._offset = MANIFEST_HEADER_SIZE
+        self.header = None
+        self.descriptors = []
+
+        self.interface_desc = None
+        self.string_descs = {}
+        self.bundle_descs = {}
+        self.cport_descs = {}
+
+    def add_header(self, hdr):
+        self.header = hdr
+
+    def __add_desc(self, desc):
+        self.descriptors.append(desc)
+
+    def add_interface_desc(self, desc):
+        assert self.interface_desc is None, \
+                "multiple instances of '{}'".format(self.instances.title)
+        self.interface_desc = desc
+        self.__add_desc(desc)
+
+    def __add_desc_dict(self, dict_, desc):
+        if desc.id_ in dict_:
+            raise Error("duplicated 'id' for descriptors '{}' and '{}'"
+                    .format(desc, dict_[desc.id_]))
+        dict_[desc.id_] = desc
+
+    def add_string_desc(self, desc):
+        self.__add_desc_dict(self.string_descs, desc)
+        self.__add_desc(desc)
+
+    def add_bundle_desc(self, desc):
+        self.__add_desc_dict(self.bundle_descs, desc)
+        self.__add_desc(desc)
+
+    def add_cport_desc(self, desc):
+        self.__add_desc_dict(self.cport_descs, desc)
+        self.__add_desc(desc)
+
+    def auto_check(self):
+        # check interface
+        for id_ in [self.interface_desc.vsid, self.interface_desc.psid]:
+            # check that it refers to existing strings
+            try:
+                str_desc = self.string_descs[id_]
+                str_desc.parent = self.interface_desc
+            except KeyError as e:
+                raise Error("invalid reference to id '{}' by '[{}]'"
+                        .format(id_, self.interface_desc.section))
+
+        # check cports
+        cport_control = False
+        for k in self.cport_descs:
+            # check that it refers to an existing bundle
+            try:
+                cport_desc = self.cport_descs[k]
+                bundle_desc = self.bundle_descs[cport_desc.bundle]
+                bundle_desc.add_cport(cport_desc)
+            except KeyError as e:
+                raise Error("invalid reference to bundle '{}' by '[{}]'"
+                        .format(cport_desc.bundle, cport_desc.section))
+
+            # check that the protocol is not reserved
+            if cport_desc.protocol_name == 'Reserved':
+                warnings.warn("reserved protocol for '[{}]'"
+                        .format(cport_desc.section))
+
+            # check that the protocol corresponds to the bundle's class
+            if cport_desc.protocol_class != bundle_desc.class_num:
+                warnings.warn("incompatible cport protocol '{}' of '[{}]' "
+                        "with class '{}' of '[{}]'"
+                        .format(cport_desc.protocol_name, cport_desc.section,
+                            bundle_desc.class_name, bundle_desc.section))
+
+            # check that a control cport exists
+            if cport_desc.id_ == 0 and cport_desc.protocol_name == 'Control':
+                cport_control = True
+        if cport_control is False:
+            warnings.warn("missing 'Control' cport")
+
+        # check bundles
+        bundle_control = False
+        for k in self.bundle_descs:
+            # check that the class is not reserved
+            bundle_desc = self.bundle_descs[k]
+            if bundle_desc.class_name ==  'Reserved':
+                warnings.warn("reserved class for '[{}]'"
+                        .format(bundle_desc.section))
+            # check that a control bundle exists
+            if bundle_desc.id_ == 0 and bundle_desc.class_name == 'Control':
+                bundle_control = True
+        if bundle_control is False:
+            warnings.warn("missing 'Control' bundle")
+
+        # check that all descriptors are being used
+        for desc in self.descriptors:
+            if not desc.used:
+                warnings.warn("unused descriptor '[{}]'"
+                        .format(desc.section))
+
+    def __str__(self):
+        r = "{}".format(self.header)
+        r += "\n{}".format(self.interface_desc)
+        for k in sorted(self.string_descs):
+            r += "\n{}".format(self.string_descs[k])
+        for k in sorted(self.bundle_descs):
+            r += "\n{}".format(self.bundle_descs[k])
+        for k in sorted(self.cport_descs):
+            r += "\n{}".format(self.cport_descs[k])
+        return r
+
+class ManifestHeader(object):
+    GB_VERSION_MAJOR = 0
+    GB_VERSION_MINOR = 1
+
+    def __init__(self, major, minor):
+        if (major != ManifestHeader.GB_VERSION_MAJOR or
+                minor != ManifestHeader.GB_VERSION_MINOR):
+            raise Error("invalid '[{}]' format version '{}.{}'"
+                    "(only supports '{}.{}')".format(
+                        MnfsParser.MNFS_HEADER, major, minor,
+                        ManifestHeader.GB_VERSION_MAJOR,
+                        ManifestHeader.GB_VERSION_MINOR))
+        self.major = major
+        self.minor = minor
+
+    def __str__(self):
+        r = "[{}]\n".format(MnfsParser.MNFS_HEADER)
+        r += "version-major = {}\n".format(self.major)
+        r += "version-minor = {}\n".format(self.minor)
+        return r
+
+class Descriptor(object):
+    def __init__(self, section, used = False):
+        self.section = section
+        self.used = used
+
+class InterfaceDescriptor(Descriptor):
+    def __init__(self, vendor_string_id, product_string_id, section):
+        super(InterfaceDescriptor, self).__init__(section, True)
+        self.vsid = vendor_string_id
+        self.psid = product_string_id
+
+    def __str__(self):
+        r = "[{}]\n".format(MnfsParser.INTERFACE_DESC)
+        r += "vendor-string-id = {:#x}\n".format(self.vsid)
+        r += "vendor-product-id = {:#x}\n".format(self.psid)
+        return r
+
+class StringDescriptor(Descriptor):
+    def __init__(self, id_, string, section):
+        super(StringDescriptor, self).__init__(section)
+        if id_ == 0:
+            raise Error("invalid id for '[{}]' (cannot be 0)".format(section))
+        self.id_ = id_
+        self.string = string
+        self._parent = None
+
+    @property
+    def parent(self):
+        return self._parent
+
+    @parent.setter
+    def parent(self, desc):
+        if self._parent is not None:
+            raise Error("multiple references to [{}]".format(self.section))
+        self.used = True
+        self._parent = desc
+
+    def __str__(self):
+        r = ""
+        if self.id_ == self.parent.vsid:
+            r += "; Interface vendor string\n"
+        elif self.id_ == self.parent.psid:
+            r += "; Interface product string\n"
+        r += "[{} {:#x}]\n".format(MnfsParser.STRING_DESC, self.id_)
+        r += "string = {}\n".format(self.string)
+        return r
+
+class BundleDescriptor(Descriptor):
+
+    bundle_id = 1
+
+    bundle_class = {
+            0x00: 'Control',
+            0x01: 'AP',
+            0x05: 'HID',
+            0x08: 'Power Supply',
+            0x0a: 'Bridged PHY',
+            0x0c: 'Display',
+            0x0d: 'Camera',
+            0x0e: 'Sensor',
+            0x0f: 'Lights',
+            0x10: 'Vibrator',
+            0x11: 'Loopback',
+            0x12: 'Audio',
+            0x14: 'SVC',
+            0x15: 'Firmware',
+            0xfe: 'Raw',
+            0xff: 'Vendor Specific',
+            }
+
+    def __init__(self, id_, class_, section):
+        super(BundleDescriptor, self).__init__(section)
+        if id_ == 0 and class_ != 0:
+            raise Error("invalid class for '[{}]' (should be a 'Control' bundle)".
+                    format(section))
+        elif id_ != 0:
+            if id_ != BundleDescriptor.bundle_id:
+                warnings.warn("non-incremental id for '[{}]'".format(section))
+            BundleDescriptor.bundle_id += 1
+        self.id_ = id_
+        self._class = class_
+        self.cports = []
+
+    @property
+    def class_num(self):
+        return self._class
+
+    @property
+    def class_name(self):
+        try:
+            return self.bundle_class[self._class]
+        except KeyError:
+            return "Reserved"
+
+    def add_cport(self, desc):
+        self.used = True
+        self.cports.append(desc)
+
+    def __str__(self):
+        r = "; '{}' class on Bundle {}\n".format(self.class_name, self.id_)
+        r += "[{} {:#x}]\n".format(MnfsParser.BUNDLE_DESC, self.id_)
+        r += "class = {:#x}\n".format(self.class_num)
+        return r
+
+class CPortDescriptor(Descriptor):
+
+    cport_protocol = {
+            0x00: ('Control'            , 0x00),
+            0x01: ('AP'                 , 0x01),
+            0x02: ('GPIO'               , 0x0a),
+            0x03: ('I2C'                , 0x0a),
+            0x04: ('UART'               , 0x0a),
+            0x05: ('HID'                , 0x05),
+            0x06: ('USB'                , 0x0a),
+            0x07: ('SDIO'               , 0x0a),
+            0x08: ('Power Supply'       , 0x08),
+            0x09: ('PWM'                , 0x0a),
+            0x0b: ('SPI'                , 0x0a),
+            0x0c: ('Display'            , 0x0c),
+            0x0d: ('Camera Management'  , 0x0d),
+            0x0e: ('Sensor'             , 0x0e),
+            0x0f: ('Lights'             , 0x0f),
+            0x10: ('Vibrator'           , 0x10),
+            0x11: ('Loopback'           , 0x11),
+            0x12: ('Audio Management'   , 0x12),
+            0x13: ('Audio Data'         , 0x12),
+            0x14: ('SVC'                , 0x14),
+            0x15: ('Firmware'           , 0x15),
+            0x16: ('Camera Data'        , 0x0d),
+            0xfe: ('Raw'                , 0xfe),
+            0xff: ('Vendor Specific'    , 0xff),
+            }
+
+    def __init__(self, id_, bundle, protocol, section):
+        super(CPortDescriptor, self).__init__(section, True)
+        if id_ == 0 and protocol != 0:
+            raise Error("invalid protocol for '[{}]' (should be a 'Control' CPort)"
+                    .format(section))
+        self.id_ = id_
+        self.bundle = bundle
+        self._protocol = protocol
+
+    @property
+    def protocol_data(self):
+        try:
+            return self.cport_protocol[self._protocol]
+        except KeyError:
+            return ("Reserved", None)
+
+    @property
+    def protocol_num(self):
+        return self._protocol
+
+    @property
+    def protocol_name(self):
+        return self.protocol_data[0]
+
+    @property
+    def protocol_class(self):
+        return self.protocol_data[1]
+
+    def __str__(self):
+        r = "; '{}' protocol on CPort {}\n".format(self.protocol_name,
+                self.id_)
+        r += "[{} {:#x}]\n".format(MnfsParser.CPORT_DESC, self.id_)
+        r += "bundle = {:#x}\n".format(self.bundle)
+        r += "protocol = {:#x}\n".format(self.protocol_num)
+        return r
+
+### File parsers
+class MnfsParser(object):
+
+    # strings
+    MNFS_HEADER         = 'manifest-header'
+    MNFS_HEADER_VMAJ    = 'version-major'
+    MNFS_HEADER_VMIN    = 'version-minor'
+    INTERFACE_DESC      = 'interface-descriptor'
+    INTERFACE_DESC_VSID = 'vendor-string-id'
+    INTERFACE_DESC_PSID = 'product-string-id'
+    STRING_DESC         = 'string-descriptor'
+    STRING_DESC_STRING  = 'string'
+    BUNDLE_DESC         = 'bundle-descriptor'
+    BUNDLE_DESC_CLASS   = 'class'
+    CPORT_DESC          = 'cport-descriptor'
+    CPORT_DESC_BUNDLE   = 'bundle'
+    CPORT_DESC_PROTOCOL = 'protocol'
+
+    # sizes
+    MNFS_HEADER_VERSION_SIZE    = 1
+    ID_DESC_SIZE                = 1
+    STRING_DESC_STRING_SIZE     = 255
+    BUNDLE_DESC_CLASS_SIZE      = 1
+    CPORT_ID_DESC_SIZE          = 2
+    CPORT_DESC_PROTOCOL_SIZE    = 1
+
+    def __init__(self):
+        pass
+
+    def __check_int(self, int_val, num_bytes):
+        min_ = 0
+        max_ = 2**(8 * num_bytes) - 1
+        if int_val < min_ or int_val > max_:
+            raise ValueError("out of range ([{}:{}])".format(min_, max_))
+        return int_val
+
+    def __parse_id(self, section, num_bytes):
+        try:
+            # Accepted syntax is '<descriptor-type> <id>'
+            # and id can be double-quoted.
+            id_ = int(section.split()[1].strip('"'), base=0)
+            return self.__check_int(id_, num_bytes)
+        except IndexError:
+            raise Error("missing id value in '[{}]'".format(section))
+        except ValueError as e:
+            raise Error("invalid id value in '[{}]': {}"
+                    .format(section, str(e)))
+
+    def __get_option(self, cfg_parser, section, option_name):
+        try:
+            return cfg_parser.get(section, option_name)
+        except configparser.NoOptionError as e:
+            raise Error("missing field '{}' in '[{}]'".format(option_name,
+                section))
+
+    def __get_int_option(self, cfg_parser, section, option_name, num_bytes):
+        try:
+            str_opt = self.__get_option(cfg_parser, section, option_name)
+            int_opt =  int(str_opt, base=0)
+            return self.__check_int(int_opt, num_bytes)
+        except ValueError as e:
+            raise Error("invalid value '{}' for field '{}' in '[{}]': {}"
+                    .format(int_opt, option_name, section, str(e)))
+
+    def __get_str_option(self, cfg_parser, section, option_name, max_):
+        str_opt = self.__get_option(cfg_parser, section, option_name)
+        if len(str_opt) > max_:
+            raise Error("string '{}' for field '{}' in '[{}]' "
+            "is too long (maximum is {})".format(str_opt, option_name, section,
+                max_))
+        return str_opt
+
+    def parse_file(self, mnfs_file):
+        # force an OrderedDict to get deterministic output even on Python 2.6.
+        cfg_parser = configparser.ConfigParser(dict_type=collections.OrderedDict)
+
+        with open(mnfs_file, 'r') as f:
+            cfg_parser.readfp(f)
+
+        manifest = Manifest()
+
+        # the error reporting in this function is purely syntaxical
+
+        for section in cfg_parser.sections():
+            if section != section.strip():
+                raise Error("invalid spaces in '[{}]'".format(section))
+
+            if section == MnfsParser.MNFS_HEADER:
+                vmaj = self.__get_int_option(cfg_parser, section,
+                        MnfsParser.MNFS_HEADER_VMAJ,
+                        MnfsParser.MNFS_HEADER_VERSION_SIZE)
+                vmin = self.__get_int_option(cfg_parser, section,
+                        MnfsParser.MNFS_HEADER_VMIN,
+                        MnfsParser.MNFS_HEADER_VERSION_SIZE)
+
+                header = ManifestHeader(vmaj, vmin)
+                manifest.add_header(header)
+
+            elif section == MnfsParser.INTERFACE_DESC:
+                vsid = self.__get_int_option(cfg_parser, section,
+                        MnfsParser.INTERFACE_DESC_VSID,
+                        MnfsParser.ID_DESC_SIZE)
+                psid = self.__get_int_option(cfg_parser, section,
+                        MnfsParser.INTERFACE_DESC_PSID,
+                        MnfsParser.ID_DESC_SIZE)
+
+                interface = InterfaceDescriptor(vsid, psid, section)
+                manifest.add_interface_desc(interface)
+
+            elif section.split()[0] == MnfsParser.STRING_DESC:
+                id_ = self.__parse_id(section, MnfsParser.ID_DESC_SIZE)
+                str_ = self.__get_str_option(cfg_parser, section,
+                        MnfsParser.STRING_DESC_STRING,
+                        MnfsParser.STRING_DESC_STRING_SIZE)
+
+                string = StringDescriptor(id_, str_, section)
+                manifest.add_string_desc(string)
+
+            elif section.split()[0] == MnfsParser.BUNDLE_DESC:
+                id_ = self.__parse_id(section, MnfsParser.ID_DESC_SIZE)
+                class_ = self.__get_int_option(cfg_parser, section,
+                        MnfsParser.BUNDLE_DESC_CLASS,
+                        MnfsParser.BUNDLE_DESC_CLASS_SIZE)
+
+                bundle = BundleDescriptor(id_, class_, section)
+                manifest.add_bundle_desc(bundle)
+
+            elif section.split()[0] == MnfsParser.CPORT_DESC:
+                id_ = self.__parse_id(section, MnfsParser.CPORT_ID_DESC_SIZE)
+                bundle = self.__get_int_option(cfg_parser, section,
+                        MnfsParser.CPORT_DESC_BUNDLE,
+                        MnfsParser.ID_DESC_SIZE)
+                protocol = self.__get_int_option(cfg_parser, section,
+                        MnfsParser.CPORT_DESC_PROTOCOL,
+                        MnfsParser.CPORT_DESC_PROTOCOL_SIZE)
+
+                cport = CPortDescriptor(id_, bundle, protocol, section)
+                manifest.add_cport_desc(cport)
+
+            else:
+                raise Error("invalid descriptor '[{}]'".format(section))
+
+        return manifest
+
+class MnfbParser(object):
+    pass
+
+### Generators
+
+class MnfbGenerator(object):
+
+    # types
+    INTERFACE_DESC_TYPE = 0x01
+    STRING_DESC_TYPE    = 0x02
+    BUNDLE_DESC_TYPE    = 0x03
+    CPORT_DESC_TYPE     = 0x04
+
+    # sizes
+    MNFS_MAX_SIZE           = 0xffff
+    MNFS_HEADER_SIZE        = 0x4
+    BASE_DESC_SIZE          = 0x4
+    INTERFACE_DESC_SIZE     = BASE_DESC_SIZE + 0x4
+    STRING_DESC_BASE_SIZE   = BASE_DESC_SIZE + 0x2
+    BUNDLE_DESC_SIZE        = BASE_DESC_SIZE + 0x4
+    CPORT_DESC_SIZE         = BASE_DESC_SIZE + 0x4
+
+    STRING_MAX_SIZE         = 0xff
+    STRING_DESC_MAX_SIZE    = STRING_DESC_BASE_SIZE + STRING_MAX_SIZE
+
+    # formatting
+    MNFS_HEADER_FMT         = '<HBB'
+    BASE_DESC_FMT           = '<HBx'
+    INTERFACE_DESC_FMT      = BASE_DESC_FMT + 'BB'
+    STRING_DESC_BASE_FMT    = BASE_DESC_FMT + 'BB'
+    BUNDLE_DESC_FMT         = BASE_DESC_FMT + 'BB'
+    CPORT_DESC_FMT          = BASE_DESC_FMT + 'HBB'
+
+    def __init__(self):
+        self.mnfb = bytearray(MnfbGenerator.MNFS_MAX_SIZE)
+        self.offset = MnfbGenerator.MNFS_HEADER_SIZE
+
+    def __inc_offset(self, inc):
+        self.offset += inc
+        assert self.offset % 4 == 0, self.offset
+        if self.offset >= MnfbGenerator.MNFS_MAX_SIZE:
+            raise Error("output manifest binary exceeds maximum size {:#x}"
+                    .format(MnfbGenerator.MNFS_MAX_SIZE))
+
+    def __pack_header(self, hdr):
+        struct.pack_into(MnfbGenerator.MNFS_HEADER_FMT,
+                self.mnfb, 0, self.offset, hdr.major, hdr.minor)
+
+    def __pack_desc(self, desc_fmt, desc_size, desc_type, *args):
+        struct.pack_into(desc_fmt, self.mnfb, self.offset, desc_size, desc_type,
+                *args)
+        self.__inc_offset(desc_size)
+
+    def __pack_interface_desc(self, desc):
+        self.__pack_desc(MnfbGenerator.INTERFACE_DESC_FMT,
+                MnfbGenerator.INTERFACE_DESC_SIZE,
+                MnfbGenerator.INTERFACE_DESC_TYPE,
+                desc.vsid, desc.psid)
+
+    def __string_desc_size(self, string):
+        base_size = MnfbGenerator.STRING_DESC_BASE_SIZE + len(string)
+        mod = base_size % 4
+        pad_bytes = 4 - mod if mod else 0
+        return base_size + pad_bytes
+
+    def __string_desc_fmt(self, string):
+        return "{}{}s".format(MnfbGenerator. STRING_DESC_BASE_FMT, len(string))
+
+    def __pack_string_desc(self, desc):
+        string_desc_size = self.__string_desc_size(desc.string)
+        assert string_desc_size <= MnfbGenerator.STRING_DESC_MAX_SIZE, \
+                ("string descriptor too long ({}[...])"
+                        .format(desc.string[:MnfbGenerator.STRING_MAX_SIZE]))
+        string_desc_fmt = self.__string_desc_fmt(desc.string)
+        self.__pack_desc(string_desc_fmt, string_desc_size,
+                MnfbGenerator.STRING_DESC_TYPE,
+                len(desc.string), desc.id_, desc.string.encode("utf-8"))
+
+    def __pack_bundle_desc(self, desc):
+        self.__pack_desc(MnfbGenerator.BUNDLE_DESC_FMT,
+                MnfbGenerator.BUNDLE_DESC_SIZE,
+                MnfbGenerator.BUNDLE_DESC_TYPE,
+                desc.id_, desc.class_num)
+
+    def __pack_cport_desc(self, desc):
+        self.__pack_desc(MnfbGenerator.CPORT_DESC_FMT,
+                MnfbGenerator.CPORT_DESC_SIZE,
+                MnfbGenerator.CPORT_DESC_TYPE,
+                desc.id_, desc.bundle, desc.protocol_num)
+
+    def generate(self, manifest):
+        # pack all the descriptors in order of their definition in the mnfs
+        for desc in manifest.descriptors:
+            if isinstance(desc, InterfaceDescriptor):
+                self.__pack_interface_desc(desc)
+            elif isinstance(desc, StringDescriptor):
+                self.__pack_string_desc(desc)
+            elif isinstance(desc, BundleDescriptor):
+                self.__pack_bundle_desc(desc)
+            elif isinstance(desc, CPortDescriptor):
+                self.__pack_cport_desc(desc)
+            else:
+                assert isinstance(desc, Descriptor), desc
+
+        # save the header for last when we know the size of the whole structure
+        self.__pack_header(manifest.header)
 
     def __get_mnfb(self):
-        struct.pack_into(MANIFEST_HEADER_FMT, self.__mnfb, 0,
-                         self._offset, GB_VERSION_MAJOR, GB_VERSION_MINOR);
-        return self.__mnfb[:self._offset]
+        return self.mnfb[:self.offset]
 
-    mnfb = property(fget=__get_mnfb, doc="Current manifest binary")
-
-    def _inc_offset(self, offset):
-        self._offset += offset
-        assert self._offset % 4 == 0, self._offset
-        if self._offset >= MANIFEST_MAX_SIZE:
-            raise OverflowError("manifest binary would exceed maximum size 0x{:x}".format(
-                MANIFEST_MAX_SIZE))
-
-    def add_interface_descriptor(self, vendor_string_id, product_string_id):
-        """Append an interface descriptor to the manifest binary."""
-        struct.pack_into(INTERFACE_DESCRIPTOR_FMT, self.__mnfb, self._offset,
-                         INTERFACE_DESCRIPTOR_SIZE, INTERFACE_DESCRIPTOR_TYPE,
-                         vendor_string_id, product_string_id)
-        self._inc_offset(INTERFACE_DESCRIPTOR_SIZE)
-
-    def add_string_descriptor(self, id_, str_):
-        """Append a string descriptor to the manifest binary."""
-        desc_size = string_descriptor_size(str_)
-        if desc_size > STRING_DESCRIPTOR_MAX_SIZE:
-            err = 'string too long; desc. length={}, max={}: "{}[...]"'.format(
-                desc_size, STRING_DESCRIPTOR_MAX_SIZE, str_[:15])
-            raise ValueError(err)
-        fmt = string_descriptor_fmt(str_)
-        struct.pack_into(fmt, self.__mnfb, self._offset,
-                         desc_size, STRING_DESCRIPTOR_TYPE,
-                         len(str_), id_, str_.encode('utf-8'))
-        self._inc_offset(desc_size)
-
-    def add_bundle_descriptor(self, id_, class_):
-        """Append a bundle descriptor to the manifest binary."""
-        struct.pack_into(BUNDLE_DESCRIPTOR_FMT, self.__mnfb, self._offset,
-                         BUNDLE_DESCRIPTOR_SIZE, BUNDLE_DESCRIPTOR_TYPE,
-                         id_, class_)
-        self._inc_offset(BUNDLE_DESCRIPTOR_SIZE)
-
-    def add_cport_descriptor(self, id_, bundle, protocol):
-        """Append a CPort descriptor to the manifest binary."""
-        struct.pack_into(CPORT_DESCRIPTOR_FMT, self.__mnfb, self._offset,
-                         CPORT_DESCRIPTOR_SIZE, CPORT_DESCRIPTOR_TYPE,
-                         id_, bundle, protocol)
-        self._inc_offset(CPORT_DESCRIPTOR_SIZE)
-
-def parse_id(sec):
-    """Parse IDs from section headers.
-
-    The section header is assumed to be of the form 'XXX "id"'
-    (with the double quotes), with an integer id. This function
-    returns id as an int, or raises ValueError."""
-    try:
-        return int(sec.split()[1].strip('"'))
-    except ValueError:
-        raise ValueError('invalid section header: {}'.format(sec))
-
-def warn_on_old_id_syntax(mnfs_file, cfg_parser, sec):
-    try:
-        cfg_parser.get(sec, 'id')
-    except configparser.NoOptionError:
-        pass
-    else:
-        print('Warning: {}: ignoring obsolete "id" item in section {}'.format(
-                  mnfs_file, sec),
-              file=sys.stderr)
-
-def generate_mnfb(mnfs_file):
-    # Force an OrderedDict to get deterministic output even on Python 2.6.
-    cfg_parser = configparser.ConfigParser(dict_type=collections.OrderedDict)
-    parsed_files = cfg_parser.read(mnfs_file)
-    if mnfs_file not in parsed_files:
-        raise IOError("can't read {}.".format(mnfs_file))
-
-    mp = ManifestPacker()
-
-    # configparser isn't quite up to the task for the .mnfs format so
-    # we do a little extra parsing here for sections which have
-    # separate quoted identifiers (e.g. [cport-descriptor "1"]).
-    #
-    # NB: for descriptors which have IDs older versions of manifesto
-    # had an id=X field within the section. However, manifests still
-    # had [section-header "id"] headers. We now parse the ID from the
-    # section header, but emit warnings so users of old manifests
-    # don't get confused. These warnings can be removed if enough time
-    # goes by that "enough" users are converted over.
-    for sec in cfg_parser.sections():
-        sec_s = sec.strip()
+    def write_file(self, mnfb_file):
         try:
-            if sec_s == MNFS_MNFS_HEADER:
-                vmaj = int(cfg_parser.get(sec, MNFS_MNFS_HEADER_VMAJ),
-                           base=0)
-                vmin = int(cfg_parser.get(sec, MNFS_MNFS_HEADER_VMIN),
-                           base=0)
-                if not (vmaj == GB_VERSION_MAJOR and vmin == GB_VERSION_MINOR):
-                    raise ValueError(
-                        "Got version {}.{}; only version {}.{} interfaces are supported".format(
-                        vmaj, vmin, GB_VERSION_MAJOR, GB_VERSION_MINOR))
-            elif sec_s == MNFS_INTERFACE_DESC:
-                vsid = int(cfg_parser.get(sec, MNFS_INTERFACE_DESC_VSID),
-                           base=0)
-                psid = int(cfg_parser.get(sec, MNFS_INTERFACE_DESC_PSID),
-                            base=0)
-                mp.add_interface_descriptor(vsid, psid)
-            elif sec_s.startswith(MNFS_STRING_DESC):
-                if sec.split()[0] != MNFS_STRING_DESC:
-                    raise ValueError('invalid section [{}]'.format(sec))
-                warn_on_old_id_syntax(mnfs_file, cfg_parser, sec_s)
-                id_ = parse_id(sec_s)
-                str_ = cfg_parser.get(sec, MNFS_STRING_DESC_STRING)
-                mp.add_string_descriptor(id_, str_)
-            elif sec_s.startswith(MNFS_BUNDLE_DESC):
-                if sec.split()[0] != MNFS_BUNDLE_DESC:
-                    raise ValueError('invalid section [{}]'.format(sec))
-                warn_on_old_id_syntax(mnfs_file, cfg_parser, sec_s)
-                id_ = parse_id(sec_s)
-                class_ = int(cfg_parser.get(sec, MNFS_BUNDLE_DESC_CLASS),
-                             base=0)
-                mp.add_bundle_descriptor(id_, class_)
-            elif sec_s.startswith(MNFS_CPORT_DESC):
-                if sec.split()[0] != MNFS_CPORT_DESC:
-                    raise ValueError('invalid section [{}]'.format(sec))
-                warn_on_old_id_syntax(mnfs_file, cfg_parser, sec_s)
-                id_ = parse_id(sec_s)
-                bundle = int(cfg_parser.get(sec, MNFS_CPORT_DESC_BUNDLE),
-                             base=0)
-                protocol = int(cfg_parser.get(sec, MNFS_CPORT_DESC_PROTOCOL),
-                               base=0)
-                mp.add_cport_descriptor(id_, bundle, protocol)
+            if mnfb_file == "stdout":
+                sys.stdout.write(self.__get_mnfb())
             else:
-                raise ValueError('invalid section [{}]'.format(sec))
-        except configparser.NoOptionError as e:
-            raise ValueError(e.message)
+                with open(mnfb_file, 'wb') as f:
+                    f.write(self.__get_mnfb())
+        except IOError as e:
+            raise Error("can't write manifest binary '{}': {}"
+                    .format(mnfb, str(e)))
 
-    return mp.mnfb
+### Command line arguments
+def get_args():
+    parser = argparse.ArgumentParser()
 
+    parser.add_argument('infile',
+            help='specify an input manifest file')
+
+    parser.add_argument('-I', '--in-format', default='mnfs',
+            choices=['mnfs', 'mnfb'],
+            help='input formats (default is mnfs)')
+
+    parser.add_argument('-o', '--out', default='stdout',
+            help='output file (default is stdout)')
+
+    parser.add_argument('-O', '--out-format', default='mnfb',
+            choices=['mnfs', 'mnfb'],
+            help='output formats (default is mnfb)')
+
+    parser.add_argument('-s', '--silent', action='store_true',
+            help='silence the (potentially relevant) warnings')
+
+    return parser.parse_args()
+
+### Main
 def main():
-    if len(sys.argv) != 2:
-        print('Error: missing manifest file.', file=sys.stderr)
-        usage()
+    # parse command line arguments
+    args = get_args()
+    warnings.silent = args.silent
 
-    mnfs = sys.argv[1]
-    mnfb = os.path.splitext(mnfs)[0] + '.mnfb'
+    # get input parser
+    if args.in_format == "mnfs":
+        parser = MnfsParser()
+    else:
+        parser = MnfbParser()
 
+    # get a manifest from the file
+    manifest = parser.parse_file(args.infile)
+
+    # check the manifest
+    manifest.auto_check()
+
+    # generate output
+    if args.out_format == "mnfs":
+        print(manifest, end='')
+    else:
+        mnfb_gen = MnfbGenerator()
+        mnfb_gen.generate(manifest)
+        mnfb_gen.write_file(args.out)
+
+if __name__ == "__main__":
     try:
-        mnfb_contents = generate_mnfb(mnfs)
-    except ValueError as ve:
-        print("Error: invalid manifest: {}".format(ve.message),
-               file=sys.stderr)
-        abort()
-    except (IOError, OverflowError) as e:
-        print("Error: {}".format(e.message), file=sys.stderr)
-        abort()
-
-    try:
-        with open(mnfb, 'wb') as f:
-            f.write(mnfb_contents)
-    except IOError as e:
-        print("Error: can't write {}: {}".format(mnfb, e.strerror),
-              file=sys.stderr)
-        abort()
-
-if __name__ == '__main__':
-    main()
+        main()
+    except Exception as e:
+        print_stderr("Error: {}".format(e))
+        sys.exit(1)
