@@ -40,7 +40,7 @@ string = Simple Audio Interface
 ; I2S mgmt protocol on CPort 1
 [cport-descriptor 1]
 bundle = 1
-protocol = 0x0a
+protocol = 0x12
 
 ; I2S data reciever on CPort 2
 [cport-descriptor 2]
@@ -49,4 +49,4 @@ protocol = 0x12
 
 ; Bundle 1
 [bundle-descriptor 1]
-class = 0x0a 
+class = 0x12 
