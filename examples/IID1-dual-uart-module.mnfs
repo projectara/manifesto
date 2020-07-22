@@ -44,7 +44,7 @@ protocol = 0x04
 
 ; Bundle 1
 [bundle-descriptor 1]
-class = 4
+class = 0x0a
 
 ; UART protocol on CPort 2
 [cport-descriptor 2]
@@ -53,4 +53,4 @@ protocol = 0x04
 
 ; Bundle 2
 [bundle-descriptor 2]
-class = 4
+class = 0x0a

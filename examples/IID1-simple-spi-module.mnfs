@@ -44,4 +44,4 @@ protocol = 0x0b
 
 ; Bundle 1
 [bundle-descriptor 1]
-class = 11
+class = 0x0a
