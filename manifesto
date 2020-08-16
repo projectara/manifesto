@@ -517,7 +517,89 @@ class MnfsParser(object):
         return manifest
 
 class MnfbParser(object):
-    pass
+
+    def __init__(self):
+        self._mnfb_data = []
+        pass
+
+    def parse_file(self, mnfb_file):
+        manifest = Manifest()
+
+        offset = 0
+
+        with open(mnfb_file, 'r') as f:
+            self._mnfb_data = bytearray(f.read())
+
+        mnfb_header = struct.unpack_from(MnfbGenerator.MNFS_HEADER_FMT, self._mnfb_data, offset)
+
+        if len(self._mnfb_data) != mnfb_header[0]:
+            raise Error("mnfb length mismatch: expected: {} actual: {}").format(len(self._mnfb_data), mnfb_header[0])
+
+        remaining = len(self._mnfb_data)
+
+        manifest.add_header(ManifestHeader(mnfb_header[1], mnfb_header[2]))
+        offset += MnfbGenerator.MNFS_HEADER_SIZE
+        remaining -= MnfbGenerator.MNFS_HEADER_SIZE
+
+        while offset < len(self._mnfb_data):
+            desc = struct.unpack_from(MnfbGenerator.BASE_DESC_FMT, self._mnfb_data, offset)
+
+            desc_size = desc[0]
+            desc_type = desc[1]
+
+            if desc_size > remaining:
+                raise Error("desc size: {} remaining: {}").format(desc_size, remaining)
+
+            if desc_type == MnfbGenerator.INTERFACE_DESC_TYPE:
+
+                if desc_size != MnfbGenerator.INTERFACE_DESC_SIZE:
+                    raise Error("desc size: expected: {} actual: {}").format(desc_size, MnfbGenerator.INTERFACE_DESC_SIZE)
+
+                desc = struct.unpack_from(MnfbGenerator.INTERFACE_DESC_FMT, self._mnfb_data, offset)
+                manifest.add_interface_desc(InterfaceDescriptor(desc[2], desc[3], None))
+
+            elif desc_type == MnfbGenerator.STRING_DESC_TYPE:
+
+                if desc_size > MnfbGenerator.STRING_DESC_MAX_SIZE:
+                    raise Error("unsupported string descriptor size: {}").format(desc_size)
+
+                desc = struct.unpack_from(MnfbGenerator.STRING_DESC_BASE_FMT, self._mnfb_data, offset)
+                string_size = desc[2]
+
+                if string_size > MnfbGenerator.STRING_MAX_SIZE:
+                    raise Error("unsupported string size: {}").format(string_size)
+
+                if string_size + MnfbGenerator.STRING_DESC_BASE_SIZE > desc_size:
+                    raise Error("invalid string size: {}").format(string_size)
+
+                string_fmt = "{}s".format(string_size)
+                string_value = struct.unpack_from(string_fmt, self._mnfb_data, offset + MnfbGenerator.STRING_DESC_BASE_SIZE)[0]
+
+                manifest.add_string_desc(StringDescriptor(desc[3], string_value, None))
+
+            elif desc_type == MnfbGenerator.BUNDLE_DESC_TYPE:
+
+                if desc_size != MnfbGenerator.BUNDLE_DESC_SIZE:
+                    raise Error("desc size: expected: {} actual: {}").format(desc_size, MnfbGenerator.BUNDLE_DESC_SIZE)
+
+                desc = struct.unpack_from(MnfbGenerator.BUNDLE_DESC_FMT, self._mnfb_data, offset)
+                manifest.add_bundle_desc(BundleDescriptor(desc[2], desc[3], None))
+
+            elif desc_type == MnfbGenerator.CPORT_DESC_TYPE:
+
+                if desc_size != MnfbGenerator.CPORT_DESC_SIZE:
+                    raise Error("desc size: expected: {} actual: {}").format(desc_size, MnfbGenerator.CPORT_DESC_SIZE)
+
+                desc = struct.unpack_from(MnfbGenerator.CPORT_DESC_FMT, self._mnfb_data, offset)
+                manifest.add_cport_desc(CPortDescriptor(desc[3], desc[2], desc[4], None))
+
+            else:
+                raise Error("unrecognized descriptor type {}").format(desc_type)
+
+            offset += desc_size
+            remaining -= desc_size
+
+        return manifest
 
 ### Generators
 
