@@ -1,0 +1,80 @@
+;
+; mikroBUS Add-on Board Manifest
+; for enc28j60 ethernet controller
+;
+; Copyright 2020 BeagleBoard.org Foundation
+;
+
+[manifest-header]
+version-major = 0
+version-minor = 1
+
+[interface-descriptor]
+vendor-string-id = 1
+product-string-id = 2
+
+; Interface vendor string (id can't be 0)
+[string-descriptor 1]
+string = MikroElektronika
+
+; Interface product string (id can't be 0)
+[string-descriptor 2]
+string = ENC28J60 Ethernet Controller
+
+; mikrobus-descriptor describes the setup of
+; mikroBUS Pins and the GPIO states required for 
+; the add-on board.
+[mikrobus-descriptor]
+pwm-state = 4
+int-state = 1
+rx-state = 7
+tx-state = 7
+scl-state = 6
+sda-state = 6
+mosi-state = 5
+miso-state = 5
+sck-state = 5
+cs-state = 5
+rst-state = 2
+an-state = 1
+
+; gbphy protocol Bundle 0
+[bundle-descriptor 1]
+class = 0xa
+
+; GPIO protocol on CPort 1
+[cport-descriptor 1]
+bundle = 1
+protocol = 0x2
+
+; SPI protocol on CPort 1
+[cport-descriptor 2]
+bundle = 1
+protocol = 0xb
+
+; device-descriptor describes each device
+; present on the add-on board and other details
+; required by the device driver. The device-descriptor
+; has the following fields,
+; driver-string-id : device driver string id
+; protocol : type of bus the device uses , can be 
+; one of the Greybus CPORT Protocols
+; mode : SPI Device Mode
+; reg : CS relative to mikrobus port(0-CS,1- GPIO CS on RST)
+; irq : IRQ GPIO used by the device
+; irq_type : Type of IRQ used by the
+; device, same values as described 
+; in linux/irq.h
+[device-descriptor 1]
+driver-string-id = 3
+protocol = 0xb
+mode = 0x0
+reg = 0
+max-speed-hz = 16000000
+irq = 1
+irq-type = 0x2
+
+; device driver string (id can't be 0)
+[string-descriptor 3]
+string = enc28j60
+
