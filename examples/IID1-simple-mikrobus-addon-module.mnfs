@@ -22,19 +22,21 @@ string = MikroElektronika
 string = ENC28J60 Ethernet Controller
 
 ; mikrobus-descriptor describes the setup of
-; mikroBUS GPIOs and the number of devices
-; present in the add-on board. The GPIO positions 
-; are relative to the mikrobus and the following 
-; values can be used to refer to different GPIOs
-; on the mikrobus port.
-; MIKROBUS_GPIO_INT = 0x01
-; MIKROBUS_GPIO_RST = 0x02
-; MIKROBUS_GPIO_PWM = 0x03
+; mikroBUS Pins and the GPIO states required for 
+; the add-on board.
 [mikrobus-descriptor]
-num-devices = 1
-int-gpio = 1
-rst-gpio = 2
-pwm-gpio = 0
+pwm-state = 4
+int-state = 1
+rx-state = 7
+tx-state = 7
+scl-state = 6
+sda-state = 6
+mosi-state = 5
+miso-state = 5
+sck-state = 5
+cs-state = 5
+rst-state = 2
+an-state = 1
 
 ; gbphy protocol Bundle 0
 [bundle-descriptor 1]
@@ -56,19 +58,18 @@ protocol = 0xb
 ; has the following fields,
 ; driver-string-id : device driver string id
 ; protocol : type of bus the device uses , can be 
-; one of the following: 
-; MIKROBUS_PROTOCOL_SPI = 0x01
-; MIKROBUS_PROTOCOL_I2C = 0x02
-; MIKROBUS_PROTOCOL_UART = 0x03
+; one of the Greybus CPORT Protocols
 ; mode : SPI Device Mode
+; reg : CS relative to mikrobus port(0-CS,1- GPIO CS on RST)
 ; irq : IRQ GPIO used by the device
 ; irq_type : Type of IRQ used by the
 ; device, same values as described 
 ; in linux/irq.h
 [device-descriptor 1]
 driver-string-id = 3
-protocol = 0x1
+protocol = 0xb
 mode = 0x0
+reg = 0
 max-speed-hz = 16000000
 irq = 1
 irq-type = 0x2
