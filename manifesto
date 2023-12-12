@@ -449,7 +449,7 @@ class MnfsParser(object):
         cfg_parser = configparser.ConfigParser(dict_type=collections.OrderedDict)
 
         with open(mnfs_file, 'r') as f:
-            cfg_parser.readfp(f)
+            cfg_parser.read_file(f)
 
         manifest = Manifest()
 
@@ -629,7 +629,7 @@ class MnfbGenerator(object):
     def write_file(self, mnfb_file):
         try:
             if mnfb_file == "stdout":
-                sys.stdout.write(self.__get_mnfb())
+                sys.stdout.write(str(self.__get_mnfb()))
             else:
                 with open(mnfb_file, 'wb') as f:
                     f.write(self.__get_mnfb())
